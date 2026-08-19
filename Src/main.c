@@ -23,6 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include <stdbool.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +48,8 @@ I2C_HandleTypeDef hi2c1;
 I2S_HandleTypeDef hi2s3;
 
 /* USER CODE BEGIN PV */
+
+volatile bool red_button_pressed = false;
 
 /* USER CODE END PV */
 
@@ -105,11 +109,11 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE BEGIN 3 */
-  	if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4) == GPIO_PIN_SET) {
-  		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-	  } else {
-	  	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-	  }
+
+  	if (red_button_pressed) {
+  		red_button_pressed = false;
+			HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+		}
 
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
@@ -337,7 +341,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : PB4 */
   GPIO_InitStruct.Pin = GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
@@ -347,12 +351,28 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(MEMS_INT2_GPIO_Port, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_4) {
+			static uint32_t last_press_time = 0;
+			uint32_t current_time = HAL_GetTick();
+
+			if ((current_time - last_press_time) > 150) {
+				red_button_pressed = 1;
+					last_press_time = current_time;
+			}
+    }
+}
 
 /* USER CODE END 4 */
 
