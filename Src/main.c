@@ -106,19 +106,20 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1) {
-    /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN WHILE */
+    while (1)
+    {
+			if (red_button_pressed) {
+				red_button_pressed = false;
+				HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
+			}
 
-  	if (red_button_pressed) {
-  		red_button_pressed = false;
-			HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
-		}
+      /* USER CODE END WHILE */
 
-    /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
-  }
-  /* USER CODE END 3 */
+      /* USER CODE BEGIN 3 */
+      MX_USB_HOST_Process();
+    }
+    /* USER CODE END 3 */
 }
 
 /**
