@@ -24,16 +24,35 @@
 /* USER CODE BEGIN Includes */
 
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdint.h>
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef struct {
+	GPIO_TypeDef *port;
+	uint16_t pin;
+	bool last_state;
+	uint32_t last_debounce_tick;
+} button_t;
+
+typedef enum {
+	REST,
+	COUNTDOWN,
+	ALARM
+} timer_state_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define UART_RX_BUFFER_SIZE 32
+#define ALARM_BLINK_INTERVAL_MS 500
+#define BUTTON_DEBOUNCE_MS 50
 
 /* USER CODE END PD */
 
@@ -45,11 +64,33 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-I2S_HandleTypeDef hi2s3;
+UART_HandleTypeDef huart5;
 
 /* USER CODE BEGIN PV */
 
-volatile bool red_button_pressed = false;
+static uint32_t countdown_duration = 0;
+static uint32_t timer_seconds_remaining = 0;
+static timer_state_t timer_current_state = REST;
+static uint32_t timer_start_tick = 0;
+static uint32_t alarm_last_blink_tick = 0;
+
+static uint8_t rx_byte = 0;
+static char rx_line_buffer[UART_RX_BUFFER_SIZE];
+static uint8_t rx_index = 0;
+static volatile bool command_received = false;
+
+static button_t start_button = {
+	.port = GPIOA,
+	.pin = GPIO_PIN_0,
+	.last_state = 0,
+	.last_debounce_tick = 0
+};
+static button_t stop_button = {
+	.port = GPIOE,
+	.pin = GPIO_PIN_3,
+	.last_state = 0,
+	.last_debounce_tick = 0
+};
 
 /* USER CODE END PV */
 
@@ -57,15 +98,29 @@ volatile bool red_button_pressed = false;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_I2S3_Init(void);
+static void MX_UART5_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
+
+static bool check_button_pressed(button_t *button, uint32_t now);
+static uint32_t convert_input_to_ms(const char *input);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static bool check_button_pressed(button_t *button, uint32_t now) {
+	bool pin_state = (HAL_GPIO_ReadPin(button -> port, button -> pin) == GPIO_PIN_SET);
+	bool button_pressed = false;
+	if (pin_state != button -> last_state && (now - button -> last_debounce_tick) >= BUTTON_DEBOUNCE_MS) {
+		button -> last_state = pin_state;
+		button -> last_debounce_tick = now;
+		if (pin_state) button_pressed = true;
+	}
+	return button_pressed;
+}
 
 /* USER CODE END 0 */
 
@@ -99,27 +154,74 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_I2S3_Init();
   MX_USB_HOST_Init();
+  MX_UART5_Init();
   /* USER CODE BEGIN 2 */
+
+  HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
-    /* USER CODE BEGIN WHILE */
-    while (1)
-    {
-			if (red_button_pressed) {
-				red_button_pressed = false;
-				HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
-			}
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+  	uint32_t now = HAL_GetTick();
 
-      /* USER CODE END WHILE */
+  	bool start_pressed = check_button_pressed(&start_button, now);
+  	bool stop_pressed = check_button_pressed(&stop_button, now);
 
-      /* USER CODE BEGIN 3 */
-      MX_USB_HOST_Process();
-    }
-    /* USER CODE END 3 */
+  	if (command_received) {
+				command_received = false;
+				uint32_t converted_ms = convert_input_to_ms(rx_line_buffer);
+
+				if (converted_ms > 0)
+				{
+					countdown_duration = converted_ms;
+				}
+		}
+
+  	switch (timer_current_state) {
+  		case REST:
+  			HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
+  			if (start_pressed && countdown_duration > 0) {
+  				timer_current_state = COUNTDOWN;
+  				timer_seconds_remaining = countdown_duration / 1000;
+  				timer_start_tick = now;
+  			}
+  			break;
+
+  		case COUNTDOWN:
+  			if (stop_pressed) {
+  				timer_seconds_remaining = 0;
+  				timer_current_state = REST;
+  			} else if ((now - timer_start_tick) >= countdown_duration) {
+  				timer_seconds_remaining = 0;
+  				timer_current_state = ALARM;
+  				alarm_last_blink_tick = now;
+  			} else {
+  				uint32_t elapsed = now - timer_start_tick;
+  				timer_seconds_remaining = (countdown_duration - elapsed + 999) / 1000;
+  			}
+  			break;
+
+  		case ALARM:
+  			if (stop_pressed) {
+  				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
+  				timer_current_state = REST;
+  			} else if ((now - alarm_last_blink_tick) >= ALARM_BLINK_INTERVAL_MS) {
+  				HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
+  				alarm_last_blink_tick = now;
+  			}
+  			break;
+  	}
+
+    /* USER CODE END WHILE */
+    MX_USB_HOST_Process();
+
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
 }
 
 /**
@@ -202,36 +304,35 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief I2S3 Initialization Function
+  * @brief UART5 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2S3_Init(void)
+static void MX_UART5_Init(void)
 {
 
-  /* USER CODE BEGIN I2S3_Init 0 */
+  /* USER CODE BEGIN UART5_Init 0 */
 
-  /* USER CODE END I2S3_Init 0 */
+  /* USER CODE END UART5_Init 0 */
 
-  /* USER CODE BEGIN I2S3_Init 1 */
+  /* USER CODE BEGIN UART5_Init 1 */
 
-  /* USER CODE END I2S3_Init 1 */
-  hi2s3.Instance = SPI3;
-  hi2s3.Init.Mode = I2S_MODE_MASTER_TX;
-  hi2s3.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s3.Init.DataFormat = I2S_DATAFORMAT_16B;
-  hi2s3.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
-  hi2s3.Init.AudioFreq = I2S_AUDIOFREQ_96K;
-  hi2s3.Init.CPOL = I2S_CPOL_LOW;
-  hi2s3.Init.ClockSource = I2S_CLOCK_PLL;
-  hi2s3.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
-  if (HAL_I2S_Init(&hi2s3) != HAL_OK)
+  /* USER CODE END UART5_Init 1 */
+  huart5.Instance = UART5;
+  huart5.Init.BaudRate = 115200;
+  huart5.Init.WordLength = UART_WORDLENGTH_8B;
+  huart5.Init.StopBits = UART_STOPBITS_1;
+  huart5.Init.Parity = UART_PARITY_NONE;
+  huart5.Init.Mode = UART_MODE_TX_RX;
+  huart5.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart5.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart5) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2S3_Init 2 */
+  /* USER CODE BEGIN UART5_Init 2 */
 
-  /* USER CODE END I2S3_Init 2 */
+  /* USER CODE END UART5_Init 2 */
 
 }
 
@@ -256,7 +357,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2|CS_I2C_SPI_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
@@ -265,11 +366,17 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
                           |Audio_RST_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PE2 CS_I2C_SPI_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_2|CS_I2C_SPI_Pin;
+  /*Configure GPIO pin : PE2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PE3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OTG_FS_PowerSwitchOn_Pin */
@@ -287,11 +394,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(PDM_OUT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : I2S3_WS_Pin */
+  GPIO_InitStruct.Pin = I2S3_WS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(I2S3_WS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SPI1_MISO_Pin SPI1_MOSI_Pin */
   GPIO_InitStruct.Pin = SPI1_MISO_Pin|SPI1_MOSI_Pin;
@@ -324,27 +439,25 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : I2S3_MCK_Pin I2S3_SCK_Pin */
+  GPIO_InitStruct.Pin = I2S3_MCK_Pin|I2S3_SCK_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
   /*Configure GPIO pin : OTG_FS_OverCurrent_Pin */
   GPIO_InitStruct.Pin = OTG_FS_OverCurrent_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(OTG_FS_OverCurrent_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
   /*Configure GPIO pin : MEMS_INT2_Pin */
   GPIO_InitStruct.Pin = MEMS_INT2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(MEMS_INT2_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -353,15 +466,36 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-    if (GPIO_Pin == GPIO_PIN_4) {
-			static uint32_t last_press_time = 0;
-			uint32_t current_time = HAL_GetTick();
+static uint32_t convert_input_to_ms(const char *input) {
+	if (input == NULL) {
+		return 0;
+	}
 
-			if ((current_time - last_press_time) > 150) {
-				red_button_pressed = 1;
-					last_press_time = current_time;
+	char *endptr = NULL;
+	unsigned long sec = strtoul(input, &endptr, 10);
+
+	if (input == endptr || sec == 0) {
+		return 0;
+	}
+
+	return (uint32_t)(sec * 1000);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart -> Instance == UART5) {
+			HAL_UART_Transmit(&huart5, &rx_byte, 1, 10);
+
+			if (rx_byte == '\r' || rx_byte == '\n') {
+				if (rx_index > 0) {
+					rx_line_buffer[rx_index] = '\0';
+					command_received = true;
+					rx_index = 0;
+				}
+			} else if (rx_index < (UART_RX_BUFFER_SIZE - 1)) {
+				rx_line_buffer[rx_index++] = (char)rx_byte;
 			}
+
+			HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
     }
 }
 
