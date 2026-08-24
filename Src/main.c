@@ -490,6 +490,18 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 					rx_line_buffer[rx_index] = '\0';
 					command_received = true;
 					rx_index = 0;
+
+					uint8_t crlf[] = "\r\n";
+					HAL_UART_Transmit(&huart5, crlf, 2, 10);
+
+				}
+			}
+			else if (rx_byte == '\b' || rx_byte == 127) {
+				if (rx_index > 0) {
+					rx_index--;
+
+					uint8_t backspace[] = "\b \b";
+					HAL_UART_Transmit(&huart5, backspace, 3, 10);
 				}
 			} else if (rx_index < (UART_RX_BUFFER_SIZE - 1)) {
 				rx_line_buffer[rx_index++] = (char)rx_byte;
