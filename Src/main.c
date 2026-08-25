@@ -26,6 +26,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -54,6 +56,9 @@ typedef enum {
 #define ALARM_BLINK_INTERVAL_MS 500
 #define BUTTON_DEBOUNCE_MS 50
 
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,6 +68,8 @@ typedef enum {
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart5;
 
@@ -86,10 +93,74 @@ static button_t start_button = {
 	.last_debounce_tick = 0
 };
 static button_t stop_button = {
-	.port = GPIOE,
-	.pin = GPIO_PIN_3,
+	.port = GPIOB,
+	.pin = GPIO_PIN_7,
 	.last_state = 0,
 	.last_debounce_tick = 0
+};
+
+uint32_t last_display_tick = 0;
+static uint8_t oled_buffer[OLED_WIDTH * OLED_HEIGHT / 8];
+static const uint8_t font_map[][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, // Space (Index 0)
+    {0x00, 0x00, 0x5F, 0x00, 0x00}, // !
+    {0x00, 0x07, 0x00, 0x07, 0x00}, // "
+    {0x14, 0x7F, 0x14, 0x7F, 0x14}, // #
+    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, // $
+    {0x23, 0x13, 0x08, 0x64, 0x62}, // %
+    {0x36, 0x49, 0x55, 0x22, 0x50}, // &
+    {0x00, 0x05, 0x03, 0x00, 0x00}, // '
+    {0x00, 0x1C, 0x22, 0x41, 0x00}, // (
+    {0x00, 0x41, 0x22, 0x1C, 0x00}, // )
+    {0x14, 0x08, 0x3E, 0x08, 0x14}, // *
+    {0x08, 0x08, 0x3E, 0x08, 0x08}, // +
+    {0x00, 0x50, 0x30, 0x00, 0x00}, // ,
+    {0x08, 0x08, 0x08, 0x08, 0x08}, // -
+    {0x00, 0x60, 0x60, 0x00, 0x00}, // .
+    {0x20, 0x10, 0x08, 0x04, 0x02}, // /
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, // 0 (Index 16)
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46}, // 2
+    {0x21, 0x41, 0x45, 0x4B, 0x31}, // 3
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39}, // 5
+    {0x3C, 0x4A, 0x49, 0x49, 0x30}, // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03}, // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36}, // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1E}, // 9
+    {0x00, 0x36, 0x36, 0x00, 0x00}, // :
+    {0x00, 0x56, 0x36, 0x00, 0x00}, // ;
+    {0x08, 0x14, 0x22, 0x41, 0x00}, // <
+    {0x14, 0x14, 0x14, 0x14, 0x14}, // =
+    {0x00, 0x41, 0x22, 0x14, 0x08}, // >
+    {0x02, 0x01, 0x51, 0x09, 0x06}, // ?
+    {0x32, 0x49, 0x79, 0x41, 0x3E}, // @
+    {0x7E, 0x11, 0x11, 0x11, 0x7E}, // A
+    {0x7F, 0x49, 0x49, 0x49, 0x36}, // B
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, // C
+    {0x7F, 0x41, 0x41, 0x22, 0x1C}, // D
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, // E
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, // F
+    {0x3E, 0x41, 0x49, 0x49, 0x7A}, // G
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}, // H
+    {0x00, 0x41, 0x7F, 0x41, 0x00}, // I
+    {0x20, 0x40, 0x41, 0x3F, 0x01}, // J
+    {0x7F, 0x08, 0x14, 0x22, 0x41}, // K
+    {0x7F, 0x40, 0x40, 0x40, 0x40}, // L
+    {0x7F, 0x02, 0x0C, 0x02, 0x7F}, // M
+    {0x7F, 0x04, 0x08, 0x10, 0x7F}, // N
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, // O
+    {0x7F, 0x09, 0x09, 0x09, 0x06}, // P
+    {0x3E, 0x41, 0x51, 0x21, 0x5E}, // Q
+    {0x7F, 0x09, 0x19, 0x29, 0x46}, // R
+    {0x46, 0x49, 0x49, 0x49, 0x31}, // S (Index 51)
+    {0x01, 0x01, 0x7F, 0x01, 0x01}, // T
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, // U
+    {0x1F, 0x20, 0x40, 0x20, 0x1F}, // V
+    {0x3F, 0x40, 0x38, 0x40, 0x3F}, // W
+    {0x63, 0x14, 0x08, 0x14, 0x63}, // X
+    {0x07, 0x08, 0x70, 0x08, 0x07}, // Y
+    {0x61, 0x51, 0x49, 0x45, 0x43}  // Z
 };
 
 /* USER CODE END PV */
@@ -98,6 +169,7 @@ static button_t stop_button = {
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_SPI1_Init(void);
 static void MX_UART5_Init(void);
 void MX_USB_HOST_Process(void);
 
@@ -105,6 +177,12 @@ void MX_USB_HOST_Process(void);
 
 static bool check_button_pressed(button_t *button, uint32_t now);
 static uint32_t convert_input_to_ms(const char *input);
+
+void oled_clear();
+void oled_update();
+void oled_draw_pixel(uint8_t x, uint8_t y, bool color);
+void oled_draw_char(uint8_t x, uint8_t y, char c);
+void oled_draw_string(uint8_t x, uint8_t y, const char *str);
 
 /* USER CODE END PFP */
 
@@ -120,6 +198,109 @@ static bool check_button_pressed(button_t *button, uint32_t now) {
 		if (pin_state) button_pressed = true;
 	}
 	return button_pressed;
+}
+
+static void oled_write_cmd(uint8_t cmd) {
+	HAL_GPIO_WritePin(OLED_DC_GPIO_Port, OLED_DC_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_RESET);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, 10);
+	HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_SET);
+}
+
+static void oled_write_data(uint8_t *data, uint16_t size) {
+	HAL_GPIO_WritePin(OLED_DC_GPIO_Port, OLED_DC_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_RESET);
+	HAL_SPI_Transmit(&hspi1, data, size, 100);
+	HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_SET);
+}
+
+void oled_init() {
+	HAL_GPIO_WritePin(GPIOC, OLED_RES_Pin, GPIO_PIN_RESET);
+	HAL_Delay(10);
+	HAL_GPIO_WritePin(GPIOC, OLED_RES_Pin, GPIO_PIN_SET);
+	HAL_Delay(10);
+
+	oled_write_cmd(0xAE);
+
+	oled_write_cmd(0x20);
+	oled_write_cmd(0x00);
+
+	oled_write_cmd(0xA8);
+	oled_write_cmd(0x3F);
+
+	oled_write_cmd(0xD3);
+	oled_write_cmd(0x00);
+
+	oled_write_cmd(0x40);
+
+	oled_write_cmd(0xA1);
+
+	oled_write_cmd(0xC8);
+
+	oled_write_cmd(0xDA);
+	oled_write_cmd(0x12);
+
+	oled_write_cmd(0x81);
+	oled_write_cmd(0x7F);
+
+	oled_write_cmd(0xA4);
+
+	oled_write_cmd(0xA6);
+
+	oled_write_cmd(0xD5);
+	oled_write_cmd(0x80);
+
+	oled_write_cmd(0x8D);
+	oled_write_cmd(0x14);
+
+	oled_clear();
+	oled_update();
+
+	oled_write_cmd(0xAF);
+}
+
+void oled_clear() {
+	memset(oled_buffer, 0, sizeof(oled_buffer));
+}
+
+void oled_update() {
+	oled_write_cmd(0x21); oled_write_cmd(0); oled_write_cmd(OLED_WIDTH - 1);
+	oled_write_cmd(0x22); oled_write_cmd(0); oled_write_cmd((OLED_HEIGHT / 8) - 1);
+	oled_write_data(oled_buffer, sizeof(oled_buffer));
+}
+
+void oled_draw_pixel(uint8_t x, uint8_t y, bool color) {
+	if (x >= OLED_WIDTH || y >= OLED_HEIGHT) return;
+	if (color) {
+		oled_buffer[x + (y / 8) * OLED_WIDTH] |= (1 << (y % 8));
+	} else {
+		oled_buffer[x + (y / 8) * OLED_WIDTH] &= ~(1 << (y % 8));
+	}
+}
+
+void oled_draw_char(uint8_t x, uint8_t y, char c) {
+	if (c < 32 || c > 90) return;
+	uint8_t font_index = c - 32;
+	for (uint8_t col = 0; col < 5; col++) {
+		uint8_t line = font_map[font_index][col];
+		for (uint8_t row = 0; row < 7; row++) {
+			if (line & (1 << row)) {
+				oled_draw_pixel(x + col, y + row, true);
+			}
+		}
+	}
+}
+
+void oled_draw_string(uint8_t x, uint8_t y, const char *str) {
+	while (*str) {
+		if (x + 6 >= OLED_WIDTH) {
+			x = 0;
+			y += 8;
+		}
+		oled_draw_char(x, y, *str);
+		x += 6;
+		str++;
+	}
 }
 
 /* USER CODE END 0 */
@@ -155,10 +336,13 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USB_HOST_Init();
+  MX_SPI1_Init();
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
+
+  oled_init();
 
   /* USER CODE END 2 */
 
@@ -178,6 +362,7 @@ int main(void)
 				if (converted_ms > 0)
 				{
 					countdown_duration = converted_ms;
+					timer_seconds_remaining = converted_ms / 1000;
 				}
 		}
 
@@ -215,6 +400,24 @@ int main(void)
   			}
   			break;
   	}
+
+  	if ((now - last_display_tick) >= 100) {
+			last_display_tick = now;
+
+			oled_clear();
+
+			oled_draw_string(49, 12, "TIMER");
+
+			char time_str[16];
+			uint32_t secs = timer_seconds_remaining;
+
+			snprintf(time_str, sizeof(time_str), "%02lu", secs);
+			oled_draw_string(58, 32, time_str);
+
+
+
+			oled_update();
+		}
 
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
@@ -304,6 +507,44 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
   * @brief UART5 Initialization Function
   * @param None
   * @retval None
@@ -360,23 +601,26 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, OTG_FS_PowerSwitchOn_Pin|OLED_RES_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(OLED_DC_GPIO_Port, OLED_DC_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
                           |Audio_RST_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PE2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  /*Configure GPIO pins : PE2 PE3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PE3 */
-  GPIO_InitStruct.Pin = GPIO_PIN_3;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OTG_FS_PowerSwitchOn_Pin */
@@ -385,6 +629,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(OTG_FS_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : OLED_RES_Pin OLED_DC_Pin */
+  GPIO_InitStruct.Pin = OLED_RES_Pin|OLED_DC_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PDM_OUT_Pin */
   GPIO_InitStruct.Pin = PDM_OUT_Pin;
@@ -400,6 +651,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : OLED_CS_Pin */
+  GPIO_InitStruct.Pin = OLED_CS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(OLED_CS_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : I2S3_WS_Pin */
   GPIO_InitStruct.Pin = I2S3_WS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -407,14 +665,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
   HAL_GPIO_Init(I2S3_WS_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : SPI1_MISO_Pin SPI1_MOSI_Pin */
-  GPIO_InitStruct.Pin = SPI1_MISO_Pin|SPI1_MOSI_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : BOOT1_Pin */
   GPIO_InitStruct.Pin = BOOT1_Pin;
@@ -452,6 +702,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(OTG_FS_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : MEMS_INT2_Pin */
   GPIO_InitStruct.Pin = MEMS_INT2_Pin;
