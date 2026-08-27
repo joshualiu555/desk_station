@@ -47,6 +47,12 @@ typedef enum {
 	ALARM
 } timer_state_t;
 
+typedef struct {
+	uint16_t dig_T1;
+	int16_t  dig_T2;
+	int16_t  dig_T3;
+} bmp280_cali_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -58,6 +64,12 @@ typedef enum {
 
 #define OLED_WIDTH 128
 #define OLED_HEIGHT 64
+
+#define BMP280_I2C_ADDR (0x76 << 1)
+#define BMP280_REG_ID 0xD0
+#define BMP280_REG_CTRL_MEAS 0xF4
+#define BMP280_REG_TEMP_MSB 0xFA
+#define BMP280_REG_CALIB 0x88
 
 /* USER CODE END PD */
 
@@ -163,6 +175,8 @@ static const uint8_t font_map[][5] = {
     {0x61, 0x51, 0x49, 0x45, 0x43}  // Z
 };
 
+static bmp280_cali_t bmp_calib;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -183,6 +197,10 @@ void oled_update();
 void oled_draw_pixel(uint8_t x, uint8_t y, bool color);
 void oled_draw_char(uint8_t x, uint8_t y, char c);
 void oled_draw_string(uint8_t x, uint8_t y, const char *str);
+
+bool bmp280_init();
+float bmp280_read_temperature();
+float bmp280_read_temperature_f();
 
 /* USER CODE END PFP */
 
@@ -303,6 +321,44 @@ void oled_draw_string(uint8_t x, uint8_t y, const char *str) {
 	}
 }
 
+bool bmp280_init() {
+	uint8_t chip_id = 0;
+	HAL_I2C_Mem_Read(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_ID, 1, &chip_id, 1, 100);
+	if (chip_id != 0x58) {
+		return false;
+	}
+
+	uint8_t cali_raw[6];
+	HAL_I2C_Mem_Read(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_CALIB, 1, cali_raw, 6, 100);
+	bmp_calib.dig_T1 = (uint16_t)(cali_raw[1] << 8) | cali_raw[0];
+	bmp_calib.dig_T2 = (int16_t)(cali_raw[3] << 8) | cali_raw[2];
+	bmp_calib.dig_T3 = (int16_t)(cali_raw[5] << 8) | cali_raw[4];
+
+	uint8_t ctrl_meas = 0x23;
+	HAL_I2C_Mem_Write(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_CTRL_MEAS, 1, &ctrl_meas, 1, 100);
+
+	return true;
+}
+
+float bmp280_read_temperature() {
+	uint8_t raw[3];
+	HAL_I2C_Mem_Read(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_TEMP_MSB, 1, raw, 3, 100);
+
+	int32_t adc_T = (int32_t)(((uint32_t)raw[0] << 12) | ((uint32_t)raw[1] << 4) | ((uint32_t)raw[2] >> 4));
+
+	int32_t var1 = ((((adc_T >> 3) - ((int32_t)bmp_calib.dig_T1 << 1))) * ((int32_t)bmp_calib.dig_T2)) >> 11;
+	int32_t var2 = (((((adc_T >> 4) - ((int32_t)bmp_calib.dig_T1)) * ((adc_T >> 4) - ((int32_t)bmp_calib.dig_T1))) >> 12) * ((int32_t)bmp_calib.dig_T3)) >> 14;
+	int32_t t_fine = var1 + var2;
+
+	int32_t T = (t_fine * 5 + 128) >> 8;
+	return (float)T / 100.0f;
+}
+
+float bmp280_read_temperature_f() {
+	float temp_c = bmp280_read_temperature();
+	return (temp_c * 1.8f) + 32.0f;
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -343,6 +399,7 @@ int main(void)
   HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
 
   oled_init();
+  bmp280_init();
 
   /* USER CODE END 2 */
 
@@ -406,15 +463,18 @@ int main(void)
 
 			oled_clear();
 
-			oled_draw_string(49, 12, "TIMER");
-
+			oled_draw_string(49, 8, "TIMER");
 			char time_str[16];
 			uint32_t secs = timer_seconds_remaining;
-
 			snprintf(time_str, sizeof(time_str), "%02lu", secs);
-			oled_draw_string(58, 32, time_str);
+			oled_draw_string(58, 22, time_str);
 
-
+			float temp_f = bmp280_read_temperature_f();
+			char temp_str[16];
+			int whole = (int)temp_f;
+			int fraction = (int)((temp_f - (float)whole) * 10.0f);
+			snprintf(temp_str, sizeof(temp_str), "%d.%d F", whole, fraction);
+			oled_draw_string(43, 44, temp_str);
 
 			oled_update();
 		}
