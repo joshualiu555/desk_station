@@ -52,7 +52,7 @@ typedef struct {
 	uint16_t dig_T1;
 	int16_t  dig_T2;
 	int16_t  dig_T3;
-} bmp280_cali_t;
+} bmp280_calib_t;
 
 /* USER CODE END PTD */
 
@@ -90,7 +90,7 @@ UART_HandleTypeDef huart5;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
@@ -183,7 +183,7 @@ static const uint8_t font_map[][5] = {
     {0x61, 0x51, 0x49, 0x45, 0x43}  // Z
 };
 
-static bmp280_cali_t bmp_calib;
+static bmp280_calib_t bmp_calib;
 
 /* USER CODE END PV */
 
@@ -200,15 +200,15 @@ void StartDefaultTask(void *argument);
 static bool check_button_pressed(button_t *button, uint32_t now);
 static uint32_t convert_input_to_ms(const char *input);
 
-void oled_clear();
-void oled_update();
+void oled_clear(void);
+void oled_update(void);
 void oled_draw_pixel(uint8_t x, uint8_t y, bool color);
 void oled_draw_char(uint8_t x, uint8_t y, char c);
 void oled_draw_string(uint8_t x, uint8_t y, const char *str);
 
-bool bmp280_init();
-float bmp280_read_temperature();
-float bmp280_read_temperature_f();
+bool bmp280_init(void);
+float bmp280_read_temperature(void);
+float bmp280_read_temperature_f(void);
 
 /* USER CODE END PFP */
 
@@ -216,11 +216,11 @@ float bmp280_read_temperature_f();
 /* USER CODE BEGIN 0 */
 
 static bool check_button_pressed(button_t *button, uint32_t now) {
-	bool pin_state = (HAL_GPIO_ReadPin(button -> port, button -> pin) == GPIO_PIN_SET);
+	bool pin_state = (HAL_GPIO_ReadPin(button->port, button->pin) == GPIO_PIN_SET);
 	bool button_pressed = false;
-	if (pin_state != button -> last_state && (now - button -> last_debounce_tick) >= BUTTON_DEBOUNCE_MS) {
-		button -> last_state = pin_state;
-		button -> last_debounce_tick = now;
+	if (pin_state != button->last_state && (now - button->last_debounce_tick) >= BUTTON_DEBOUNCE_MS) {
+		button->last_state = pin_state;
+		button->last_debounce_tick = now;
 		if (pin_state) button_pressed = true;
 	}
 	return button_pressed;
@@ -240,7 +240,7 @@ static void oled_write_data(uint8_t *data, uint16_t size) {
 	HAL_GPIO_WritePin(OLED_CS_GPIO_Port, OLED_CS_Pin, GPIO_PIN_SET);
 }
 
-void oled_init() {
+void oled_init(void) {
 	HAL_GPIO_WritePin(GPIOC, OLED_RES_Pin, GPIO_PIN_RESET);
 	HAL_Delay(10);
 	HAL_GPIO_WritePin(GPIOC, OLED_RES_Pin, GPIO_PIN_SET);
@@ -285,11 +285,11 @@ void oled_init() {
 	oled_write_cmd(0xAF);
 }
 
-void oled_clear() {
+void oled_clear(void) {
 	memset(oled_buffer, 0, sizeof(oled_buffer));
 }
 
-void oled_update() {
+void oled_update(void) {
 	oled_write_cmd(0x21); oled_write_cmd(0); oled_write_cmd(OLED_WIDTH - 1);
 	oled_write_cmd(0x22); oled_write_cmd(0); oled_write_cmd((OLED_HEIGHT / 8) - 1);
 	oled_write_data(oled_buffer, sizeof(oled_buffer));
@@ -329,7 +329,7 @@ void oled_draw_string(uint8_t x, uint8_t y, const char *str) {
 	}
 }
 
-bool bmp280_init() {
+bool bmp280_init(void) {
 	uint8_t chip_id = 0;
 	HAL_I2C_Mem_Read(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_ID, 1, &chip_id, 1, 100);
 	if (chip_id != 0x58) {
@@ -348,7 +348,7 @@ bool bmp280_init() {
 	return true;
 }
 
-float bmp280_read_temperature() {
+float bmp280_read_temperature(void) {
 	uint8_t raw[3];
 	HAL_I2C_Mem_Read(&hi2c1, BMP280_I2C_ADDR, BMP280_REG_TEMP_MSB, 1, raw, 3, 100);
 
@@ -362,7 +362,7 @@ float bmp280_read_temperature() {
 	return (float)T / 100.0f;
 }
 
-float bmp280_read_temperature_f() {
+float bmp280_read_temperature_f(void) {
 	float temp_c = bmp280_read_temperature();
 	return (temp_c * 1.8f) + 32.0f;
 }
@@ -450,78 +450,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-  	uint32_t now = HAL_GetTick();
-
-  	bool start_pressed = check_button_pressed(&start_button, now);
-  	bool stop_pressed = check_button_pressed(&stop_button, now);
-
-  	if (command_received) {
-				command_received = false;
-				uint32_t converted_ms = convert_input_to_ms(rx_line_buffer);
-
-				if (converted_ms > 0)
-				{
-					countdown_duration = converted_ms;
-					timer_seconds_remaining = converted_ms / 1000;
-				}
-		}
-
-  	switch (timer_current_state) {
-  		case REST:
-  			HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
-  			if (start_pressed && countdown_duration > 0) {
-  				timer_current_state = COUNTDOWN;
-  				timer_seconds_remaining = countdown_duration / 1000;
-  				timer_start_tick = now;
-  			}
-  			break;
-
-  		case COUNTDOWN:
-  			if (stop_pressed) {
-  				timer_seconds_remaining = 0;
-  				timer_current_state = REST;
-  			} else if ((now - timer_start_tick) >= countdown_duration) {
-  				timer_seconds_remaining = 0;
-  				timer_current_state = ALARM;
-  				alarm_last_blink_tick = now;
-  			} else {
-  				uint32_t elapsed = now - timer_start_tick;
-  				timer_seconds_remaining = (countdown_duration - elapsed + 999) / 1000;
-  			}
-  			break;
-
-  		case ALARM:
-  			if (stop_pressed) {
-  				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
-  				timer_current_state = REST;
-  			} else if ((now - alarm_last_blink_tick) >= ALARM_BLINK_INTERVAL_MS) {
-  				HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
-  				alarm_last_blink_tick = now;
-  			}
-  			break;
-  	}
-
-  	if ((now - last_display_tick) >= 100) {
-			last_display_tick = now;
-
-			oled_clear();
-
-			oled_draw_string(49, 8, "TIMER");
-			char time_str[16];
-			uint32_t secs = timer_seconds_remaining;
-			snprintf(time_str, sizeof(time_str), "%02lu", secs);
-			oled_draw_string(58, 22, time_str);
-
-			float temp_f = bmp280_read_temperature_f();
-			char temp_str[16];
-			int whole = (int)temp_f;
-			int fraction = (int)((temp_f - (float)whole) * 10.0f);
-			snprintf(temp_str, sizeof(temp_str), "%d.%d F", whole, fraction);
-			oled_draw_string(43, 44, temp_str);
-
-			oled_update();
-		}
-
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -765,7 +693,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
   HAL_GPIO_Init(I2S3_WS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : BOOT1_Pin */
@@ -779,7 +706,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(CLK_IN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
@@ -796,7 +722,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OTG_FS_OverCurrent_Pin */
@@ -840,32 +765,32 @@ static uint32_t convert_input_to_ms(const char *input) {
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart -> Instance == UART5) {
-			HAL_UART_Transmit(&huart5, &rx_byte, 1, 10);
+    if (huart->Instance == UART5) {
+		HAL_UART_Transmit(&huart5, &rx_byte, 1, 10);
 
-			if (rx_byte == '\r' || rx_byte == '\n') {
-				if (rx_index > 0) {
-					rx_line_buffer[rx_index] = '\0';
-					command_received = true;
-					rx_index = 0;
+		if (rx_byte == '\r' || rx_byte == '\n') {
+			if (rx_index > 0) {
+				rx_line_buffer[rx_index] = '\0';
+				command_received = true;
+				rx_index = 0;
 
-					uint8_t crlf[] = "\r\n";
-					HAL_UART_Transmit(&huart5, crlf, 2, 10);
+				uint8_t crlf[] = "\r\n";
+				HAL_UART_Transmit(&huart5, crlf, 2, 10);
 
-				}
 			}
-			else if (rx_byte == '\b' || rx_byte == 127) {
-				if (rx_index > 0) {
-					rx_index--;
+		}
+		else if (rx_byte == '\b' || rx_byte == 127) {
+			if (rx_index > 0) {
+				rx_index--;
 
-					uint8_t backspace[] = "\b \b";
-					HAL_UART_Transmit(&huart5, backspace, 3, 10);
-				}
-			} else if (rx_index < (UART_RX_BUFFER_SIZE - 1)) {
-				rx_line_buffer[rx_index++] = (char)rx_byte;
+				uint8_t backspace[] = "\b \b";
+				HAL_UART_Transmit(&huart5, backspace, 3, 10);
 			}
+		} else if (rx_index < (UART_RX_BUFFER_SIZE - 1)) {
+			rx_line_buffer[rx_index++] = (char)rx_byte;
+		}
 
-			HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
+		HAL_UART_Receive_IT(&huart5, &rx_byte, 1);
     }
 }
 
@@ -880,15 +805,87 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* init code for USB_HOST */
-  MX_USB_HOST_Init();
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
+	/* init code for USB_HOST */
+	MX_USB_HOST_Init();
+	/* USER CODE BEGIN 5 */
+
+	for(;;)
+	{
+		uint32_t now = osKernelGetTickCount();
+
+		bool start_pressed = check_button_pressed(&start_button, now);
+		bool stop_pressed = check_button_pressed(&stop_button, now);
+
+		if (command_received) {
+			command_received = false;
+			uint32_t converted_ms = convert_input_to_ms(rx_line_buffer);
+
+			if (converted_ms > 0) {
+				countdown_duration = converted_ms;
+				timer_seconds_remaining = converted_ms / 1000;
+			}
+		}
+
+		switch (timer_current_state) {
+			case REST:
+				HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
+				if (start_pressed && countdown_duration > 0) {
+					timer_current_state = COUNTDOWN;
+					timer_seconds_remaining = countdown_duration / 1000;
+					timer_start_tick = now;
+				}
+				break;
+
+			case COUNTDOWN:
+				if (stop_pressed) {
+					timer_seconds_remaining = 0;
+					timer_current_state = REST;
+				} else if ((now - timer_start_tick) >= countdown_duration) {
+					timer_seconds_remaining = 0;
+					timer_current_state = ALARM;
+					alarm_last_blink_tick = now;
+				} else {
+					uint32_t elapsed = now - timer_start_tick;
+					timer_seconds_remaining = (countdown_duration - elapsed + 999) / 1000;
+				}
+				break;
+
+			case ALARM:
+				if (stop_pressed) {
+					HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
+					timer_current_state = REST;
+				} else if ((now - alarm_last_blink_tick) >= ALARM_BLINK_INTERVAL_MS) {
+					HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_2);
+					alarm_last_blink_tick = now;
+				}
+				break;
+		}
+
+		if ((now - last_display_tick) >= 100) {
+			last_display_tick = now;
+
+			oled_clear();
+
+			oled_draw_string(49, 8, "TIMER");
+			char time_str[16];
+			uint32_t secs = timer_seconds_remaining;
+			snprintf(time_str, sizeof(time_str), "%02lu", secs);
+			oled_draw_string(58, 22, time_str);
+
+			float temp_f = bmp280_read_temperature_f();
+			char temp_str[16];
+			int whole = (int)temp_f;
+			int fraction = (int)((temp_f - (float)whole) * 10.0f);
+			if (fraction < 0) fraction = -fraction;
+			snprintf(temp_str, sizeof(temp_str), "%d.%d F", whole, fraction);
+			oled_draw_string(43, 44, temp_str);
+
+			oled_update();
+		}
+
+		osDelay(10);
+	}
+	/* USER CODE END 5 */
 }
 
 /**
