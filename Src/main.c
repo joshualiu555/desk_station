@@ -93,7 +93,18 @@ const osThreadAttr_t defaultTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+osThreadId_t sensorTaskHandle;
+const osThreadAttr_t sensorTask_attributes = {
+  .name = "sensorTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
 /* USER CODE BEGIN PV */
+
+osMutexId_t temperatureMutexHandle;
+static float shared_temperature = 0.0f;
 
 static uint32_t countdown_duration = 0;
 static uint32_t timer_seconds_remaining = 0;
@@ -210,17 +221,19 @@ bool bmp280_init(void);
 float bmp280_read_temperature(void);
 float bmp280_read_temperature_f(void);
 
+void StartSensorTask(void *argument);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 static bool check_button_pressed(button_t *button, uint32_t now) {
-	bool pin_state = (HAL_GPIO_ReadPin(button->port, button->pin) == GPIO_PIN_SET);
+	bool pin_state = (HAL_GPIO_ReadPin(button -> port, button -> pin) == GPIO_PIN_SET);
 	bool button_pressed = false;
-	if (pin_state != button->last_state && (now - button->last_debounce_tick) >= BUTTON_DEBOUNCE_MS) {
-		button->last_state = pin_state;
-		button->last_debounce_tick = now;
+	if (pin_state != button -> last_state && (now - button -> last_debounce_tick) >= BUTTON_DEBOUNCE_MS) {
+		button -> last_state = pin_state;
+		button -> last_debounce_tick = now;
 		if (pin_state) button_pressed = true;
 	}
 	return button_pressed;
@@ -415,6 +428,9 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
+
+  temperatureMutexHandle = osMutexNew(NULL);
+
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -432,6 +448,7 @@ int main(void)
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  sensorTaskHandle = osThreadNew(StartSensorTask, NULL, &sensorTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -872,10 +889,16 @@ void StartDefaultTask(void *argument)
 			snprintf(time_str, sizeof(time_str), "%02lu", secs);
 			oled_draw_string(58, 22, time_str);
 
-			float temp_f = bmp280_read_temperature_f();
+			// temperature sensor mutex
+			float temperature_to_render = 0.0f;
+			if (osMutexAcquire(temperatureMutexHandle, 10U) == osOK) {
+				temperature_to_render = shared_temperature;
+				osMutexRelease(temperatureMutexHandle);
+			}
+
 			char temp_str[16];
-			int whole = (int)temp_f;
-			int fraction = (int)((temp_f - (float)whole) * 10.0f);
+			int whole = (int)temperature_to_render;
+			int fraction = (int)((temperature_to_render - (float)whole) * 10.0f);
 			if (fraction < 0) fraction = -fraction;
 			snprintf(temp_str, sizeof(temp_str), "%d.%d F", whole, fraction);
 			oled_draw_string(43, 44, temp_str);
@@ -884,6 +907,22 @@ void StartDefaultTask(void *argument)
 		}
 
 		osDelay(10);
+	}
+}
+
+void StartSensorTask(void *argument)
+{
+	for(;;)
+	{
+		float new_temperature = bmp280_read_temperature_f();
+
+		if (osMutexAcquire(temperatureMutexHandle, 100U) == osOK)
+		{
+			shared_temperature = new_temperature;
+			osMutexRelease(temperatureMutexHandle);
+		}
+
+		osDelay(1500);
 	}
 	/* USER CODE END 5 */
 }
